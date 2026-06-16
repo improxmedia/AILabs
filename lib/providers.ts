@@ -1,4 +1,4 @@
-import { ImproxModelId } from "./models";
+import { getImproxModel, ImproxModelId } from "./models";
 
 export type ProviderResponse = {
   type: "text" | "image" | "video";
@@ -23,32 +23,40 @@ export async function callImproxModel(params: {
   imageDataUrl?: string;
 }): Promise<ProviderResponse> {
   const { model, prompt, imageDataUrl } = params;
+  const publicModel = getImproxModel(model);
 
-  if (model === "improx-genius-pro") return callGeniusPro(prompt);
-  if (model === "improx-vision-studio") return callVisionStudio(prompt, imageDataUrl);
-  if (model === "improx-video-studio") return callVideoStudio(prompt);
+  if (publicModel.category === "chat") return callGeniusPro(prompt, model);
+  if (publicModel.category === "image") return callVisionStudio(prompt, imageDataUrl, model);
+  if (publicModel.category === "video") return callVideoStudio(prompt, model);
 
   throw new Error("Unknown IMPROX model.");
 }
 
-async function callGeniusPro(prompt: string): Promise<ProviderResponse> {
+async function callGeniusPro(prompt: string, selectedModel?: string): Promise<ProviderResponse> {
   /**
    * Easy provider modes:
    * 1. openai-compatible — OpenAI, NVIDIA NIM, OpenRouter, Arena if compatible
    * 2. gemini — Google Gemini API
    */
-  const provider = process.env.IMPROX_GENIUS_PROVIDER || "openai-compatible";
+  const provider = selectedModel === "improx-gemini-pro" ? "gemini" : selectedModel === "improx-llama-pro" ? "nvidia-llama" : (process.env.IMPROX_GENIUS_PROVIDER || "openai-compatible");
 
   if (provider === "gemini" && process.env.GEMINI_API_KEY) {
     return callGemini(prompt);
   }
 
-  const apiKey = process.env.IMPROX_GENIUS_API_KEY || process.env.OPENAI_API_KEY || process.env.NVIDIA_API_KEY;
-  const apiUrl = process.env.IMPROX_GENIUS_API_URL || "https://api.openai.com/v1/chat/completions";
-  const model = process.env.IMPROX_GENIUS_MODEL || "gpt-4.1";
+  const apiUrl = provider === "nvidia-llama"
+    ? "https://integrate.api.nvidia.com/v1/chat/completions"
+    : (process.env.IMPROX_GENIUS_API_URL || "");
+  const apiKey = provider === "nvidia-llama"
+    ? process.env.NVIDIA_API_KEY
+    : (process.env.IMPROX_GENIUS_API_KEY || process.env.OPENAI_API_KEY || (apiUrl.includes("nvidia.com") ? process.env.NVIDIA_API_KEY : undefined));
+  const model = provider === "nvidia-llama"
+    ? (process.env.NVIDIA_CHAT_MODEL || "meta/llama3-70b-instruct")
+    : (process.env.IMPROX_GENIUS_MODEL || "gpt-4.1");
+  const finalApiUrl = apiUrl || "https://api.openai.com/v1/chat/completions";
 
   if (apiKey) {
-    const res = await fetch(apiUrl, {
+    const res = await fetch(finalApiUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -108,20 +116,30 @@ async function callGemini(prompt: string): Promise<ProviderResponse> {
   return { type: "text", content };
 }
 
-async function callVisionStudio(prompt: string, imageDataUrl?: string): Promise<ProviderResponse> {
+async function callVisionStudio(prompt: string, imageDataUrl?: string, selectedModel?: string): Promise<ProviderResponse> {
   /**
-   * NVIDIA Visual GenAI / NIM image generation + editing connector.
-   * If an image is uploaded, we call the edit endpoint. Otherwise we call generation.
+   * NVIDIA IMAGE FIX:
+   * NVIDIA Build visual models do NOT use /v1/images/generations for hosted API.
+   * They use model-specific /v1/genai/... endpoints, for example:
+   * https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev
+   * https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-kontext-dev
    */
   const apiKey = process.env.NVIDIA_API_KEY || process.env.IMPROX_IMAGE_API_KEY;
-  const generateUrl = process.env.IMPROX_IMAGE_API_URL || "https://integrate.api.nvidia.com/v1/images/generations";
-  const editUrl = process.env.IMPROX_IMAGE_EDIT_API_URL || "https://integrate.api.nvidia.com/v1/images/edits";
+  const provider = process.env.IMPROX_IMAGE_PROVIDER || "nvidia-native";
+
+  if (apiKey && provider === "nvidia-native") {
+    return callNvidiaNativeImage(prompt, imageDataUrl, apiKey, selectedModel);
+  }
+
+  // Optional OpenAI-compatible image API mode if you later use another gateway.
+  const generateUrl = process.env.IMPROX_IMAGE_API_URL;
+  const editUrl = process.env.IMPROX_IMAGE_EDIT_API_URL;
   const genModel = process.env.IMPROX_IMAGE_MODEL || "black-forest-labs/flux_1-kontext-dev";
   const editModel = process.env.IMPROX_IMAGE_EDIT_MODEL || "qwen/qwen-image-edit-2511";
 
-  if (apiKey) {
+  if (apiKey && generateUrl && provider === "openai-compatible-image") {
     const isEdit = Boolean(imageDataUrl);
-    const res = await fetch(isEdit ? editUrl : generateUrl, {
+    const res = await fetch(isEdit ? (editUrl || generateUrl) : generateUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -135,35 +153,91 @@ async function callVisionStudio(prompt: string, imageDataUrl?: string): Promise<
       )
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`IMPROX Vision Studio provider error: ${text.slice(0, 220)}`);
-    }
-
-    const data = await res.json();
+    const text = await res.text();
+    if (!res.ok) throw new Error(`IMPROX Vision Studio provider error: ${text.slice(0, 300)}`);
+    const data = JSON.parse(text);
     const b64 = data?.data?.[0]?.b64_json || data?.artifacts?.[0]?.base64;
     const url = data?.data?.[0]?.url;
-
     if (b64) return { type: "image", content: `data:image/png;base64,${b64}` };
     if (url) return { type: "image", content: url };
     return { type: "image", content: "Image job completed, but no image payload was returned by provider." };
   }
 
-  const imagePrompt = `IMPROX Vision Studio ${imageDataUrl ? "editing" : "generation"} prompt:
-
-${prompt}
-
-Style direction: premium commercial design, sharp focus, modern lighting, clean composition, high-end advertising look, social-media ready, no messy text, brand-safe, professional color grading.`;
+  const imagePrompt = `IMPROX Vision Studio ${imageDataUrl ? "editing" : "generation"} prompt:\n\n${prompt}\n\nStyle direction: premium commercial design, sharp focus, modern lighting, clean composition, high-end advertising look, social-media ready, no messy text, brand-safe, professional color grading.`;
 
   return {
     type: "image",
-    content: `${imagePrompt}
-
-Demo mode: add NVIDIA_API_KEY to enable real image ${imageDataUrl ? "editing" : "generation"}. Recommended NVIDIA models: FLUX.1 Kontext for editing/generation and Qwen-Image-Edit for precise production edits.`
+    content: `${imagePrompt}\n\nDemo mode: add NVIDIA_API_KEY and IMPROX_IMAGE_PROVIDER=nvidia-native to enable real NVIDIA image generation.`
   };
 }
 
-async function callVideoStudio(prompt: string): Promise<ProviderResponse> {
+async function callNvidiaNativeImage(prompt: string, imageDataUrl: string | undefined, apiKey: string, selectedModel?: string): Promise<ProviderResponse> {
+  const forceEdit = selectedModel === "improx-kontext-edit";
+  const isEdit = Boolean(imageDataUrl) || forceEdit;
+  const url = isEdit
+    ? process.env.IMPROX_IMAGE_EDIT_API_URL || "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-kontext-dev"
+    : process.env.IMPROX_IMAGE_API_URL || "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev";
+
+  const body = isEdit
+    ? {
+        prompt,
+        image: imageDataUrl,
+        height: 1024,
+        width: 1024,
+        cfg_scale: 3.5,
+        aspect_ratio: "match_input_image",
+        samples: 1,
+        seed: 0,
+        steps: 30
+      }
+    : {
+        prompt,
+        height: 1024,
+        width: 1024,
+        cfg_scale: 5,
+        mode: "base",
+        samples: 1,
+        seed: 0,
+        steps: 30
+      };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+
+  const text = await res.text();
+
+  if (!res.ok) {
+    throw new Error(`NVIDIA image error ${res.status}: ${text.slice(0, 400)}`);
+  }
+
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`NVIDIA returned non-JSON response: ${text.slice(0, 250)}`);
+  }
+
+  const b64 = data?.artifacts?.[0]?.base64 || data?.data?.[0]?.b64_json || data?.image || data?.output?.[0]?.image;
+  const urlOut = data?.data?.[0]?.url || data?.url;
+
+  if (b64) {
+    const clean = String(b64).startsWith("data:image") ? String(b64) : `data:image/png;base64,${b64}`;
+    return { type: "image", content: clean };
+  }
+
+  if (urlOut) return { type: "image", content: urlOut };
+
+  return { type: "image", content: `NVIDIA request completed but image field was not found. Raw response: ${JSON.stringify(data).slice(0, 500)}` };
+}
+
+async function callVideoStudio(prompt: string, selectedModel?: string): Promise<ProviderResponse> {
   const videoBrief = `IMPROX Video Studio production brief:\n\nConcept: ${prompt}\n\nLength: 10–15 seconds\nFormat: vertical 9:16 for Reels/Shorts + adaptable 16:9\nVisual style: premium cinematic, smooth camera motion, high contrast, modern brand feel\nStructure:\n1. Hook in first 2 seconds\n2. Main visual/product/story moment\n3. Clear brand/action ending\nCamera: slow push-in, clean transitions, realistic motion\nAudio direction: modern upbeat premium sound, subtle whoosh transitions\nOutput goal: scroll-stopping social media video.`;
 
   return {

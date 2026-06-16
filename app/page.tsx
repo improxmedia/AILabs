@@ -42,7 +42,18 @@ export default function Home() {
         headers: { "Content-Type": "application/json", "x-demo-user": userId },
         body: JSON.stringify({ model: selectedModel, prompt, imageDataUrl })
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data: ApiResult;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        data = {
+          ok: false,
+          error: raw.startsWith("Request Entity")
+            ? "Uploaded image/request is too large. Please use an image under 1 MB or reduce size, then try again."
+            : raw || "Server returned a non-JSON error. Check provider URL/API key settings."
+        };
+      }
       setResult(data);
     } catch (err: any) {
       setResult({ ok: false, error: err.message || "Request failed" });
@@ -58,6 +69,10 @@ export default function Home() {
 
   function handleImageUpload(file?: File) {
     if (!file) return;
+    if (file.size > 1024 * 1024) {
+      setResult({ ok: false, error: "Image is too large. Please upload an image under 1 MB for the web version." });
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => setImageDataUrl(String(reader.result || ""));
     reader.readAsDataURL(file);

@@ -31,7 +31,7 @@ export default function AdminPage() {
                   <td className="p-4 font-semibold">{user.name}<div className="text-xs text-slate-500">{user.id}</div></td>
                   <td className="p-4 capitalize text-cyan-100">{user.role}</td>
                   <td className="p-4">{user.credits.toLocaleString()}</td>
-                  <td className="p-4 text-sm text-slate-300">{user.modelsAllowed.join(", ")}</td>
+                  <td className="p-4 text-sm text-slate-300">{user.modelsAllowed === "all" ? "All IMPROX models" : user.modelsAllowed.join(", ")}</td>
                 </tr>
               ))}
             </tbody>

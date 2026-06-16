@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { assertModelAccess, getDemoUser } from "@/lib/auth";
 import { callImproxModel } from "@/lib/providers";
+import { getImproxModel } from "@/lib/models";
 
 export async function POST(req: NextRequest) {
   try {
     const user = getDemoUser(req.headers.get("x-demo-user"));
     const { model, prompt, imageDataUrl } = await req.json();
 
-    if (model !== "improx-vision-studio") {
-      return NextResponse.json({ ok: false, error: "Use image route only for IMPROX Vision Studio." }, { status: 400 });
+    const selectedModel = getImproxModel(model);
+    if (selectedModel.category !== "image") {
+      return NextResponse.json({ ok: false, error: "This route only supports image models." }, { status: 400 });
     }
 
     assertModelAccess(user, model);
