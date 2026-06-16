@@ -181,11 +181,9 @@ async function callNvidiaNativeImage(prompt: string, imageDataUrl: string | unde
   const body = isEdit
     ? {
         prompt,
-        image: imageDataUrl,
-        height: 1024,
-        width: 1024,
+        image: imageDataUrl || null,
         cfg_scale: 3.5,
-        aspect_ratio: "match_input_image",
+        aspect_ratio: imageDataUrl ? "match_input_image" : "1:1",
         samples: 1,
         seed: 0,
         steps: 30
