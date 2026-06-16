@@ -43,7 +43,7 @@ export default function LoginPage() {
           </p>
           <div className="mt-8 grid gap-3 text-sm text-slate-300">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">✓ User ID + password access issued by IMPROX</div>
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">✓ NVIDIA/API keys stay hidden on server</div>
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">✓ ✓ Secure private IMPROX AI infrastructure</div>
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">✓ Simple tools for daily production work</div>
           </div>
         </section>
